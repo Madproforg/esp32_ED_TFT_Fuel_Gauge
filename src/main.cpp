@@ -110,13 +110,13 @@ fueldata_t fuel_info = {6, 32.0, 0.25, 0.25, true, 0 ,0, 0, cmdWiFiConfig};
 
 
 // Task handles, functions and info queue
-TaskHandle_t  tskOTA, tskBlink;
+TaskHandle_t  tskOTA, tskBlink, tskDisplay;
 QueueHandle_t QueueHandle, quFlags, mutex;
 #define LOCK xSemaphoreTake(mutex, portMAX_DELAY)
 #define RELEASE xSemaphoreGive(mutex)
 
 void doOTA(void *parameter);
-void updateDisplay(lv_timer_t *parameter);
+void updateDisplay(void *parameter);
 void ledFlagBlink(void * parameter);
 
 // web request handler
@@ -275,7 +275,8 @@ void setup() {
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
     Serial.printf("New Fuel Level = %0.2f\r\n", fuel_info.fuellevel);
-    handleRoot();
+    //handleRoot();
+    server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
 
   // fuel tank size update
@@ -285,7 +286,8 @@ void setup() {
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
     Serial.printf("New Fuel Capacity = %0.2f\r\n", fuel_info.fuelcap);
-    handleRoot();
+    //handleRoot();
+    server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
 
   // resrv level update
@@ -295,7 +297,8 @@ void setup() {
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
     Serial.printf("New res Level = %0.2f\r\n", fuel_info.fuellevel);
-    handleRoot();
+    //handleRoot();
+    server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
 
   // resrv capacity
@@ -305,7 +308,8 @@ void setup() {
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
     Serial.printf("New res cap = %0.2f\r\n", fuel_info.fuellevel);
-    handleRoot();
+    //handleRoot();
+    server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
 
   // backlight request
@@ -315,7 +319,8 @@ void setup() {
     fuel_info.light = (value == "on"?true:false);
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-    handleRoot();
+    //handleRoot();
+    server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });  
 
   // level & light update in one get request
@@ -334,7 +339,8 @@ void setup() {
     fuel_info.light = (value=="on"?true:false);
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-    handleRoot();
+    //handleRoot();
+    server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
 
   // flags
@@ -345,14 +351,24 @@ void setup() {
     memcpy(&fuel_info.flags, &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
     xQueueSend(quFlags, &flag_info, portMAX_DELAY);
-    handleRoot();
+    //handleRoot();
+    server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
+});
+  // ship name at top of screen
+  server.on("/name", []() {
+    String shipname = server.arg("name");
+    LOCK;
+    lv_label_set_text(ui_lblShipName, shipname.c_str());
+    RELEASE;
+    server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
-
+      
   // reboot witho confirmation
   server.on("/reboot", [](){
     server.send(200, "text/html",
       "<!DOCTYPE html><html><head></head><body><p>Rebooting</p></body></html>"
     );
+    delay(500);
     server.stop();
     server.close();
     ESP.restart();
@@ -361,7 +377,8 @@ void setup() {
   server.on("/endsession",[]() {
     fuel_info.cmd = cmdWaitingForStartup;
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-    handleRoot();
+    //handleRoot();
+    server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
   // platformio OTA enable
   server.on("/OTA",[]() {
@@ -414,7 +431,7 @@ void setup() {
 
   ElegantOTA.begin(&server);    // Start ElegantOTA
   xTaskCreatePinnedToCore( ledFlagBlink, "blink", 3000, NULL, 1, &tskBlink, xPortGetCoreID() );
-  
+  xTaskCreatePinnedToCore( updateDisplay, "display", 3000, NULL, 1, &tskDisplay, xPortGetCoreID() );
   Serial.println("Ready.");
 }
 
@@ -422,7 +439,7 @@ void setup() {
 void loop() {
     iotWebConf.doLoop();
     ElegantOTA.loop();
-    updateDisplay(NULL);
+    //updateDisplay(NULL);
     //ledFlagBlink(NULL);
     LOCK;
     lv_timer_handler();
@@ -468,79 +485,83 @@ ArduinoOTA.setHostname("EDFuelGauge-OTA");
     while(1) ArduinoOTA.handle();
 }
 
-void updateDisplay(lv_timer_t *parameter){
+void updateDisplay(void *parameter){
   float f, fc, r, rc;
   fueldata_t fuelinfo;
   String fuelInfo;
   uint8_t percentage;
-  lv_obj_t * activescreen = lv_disp_get_scr_act(NULL);
+  lv_obj_t * activescreen;
+  
+  for(;;){
+    // obtain current stats
+    xQueueReceive(QueueHandle, &fuelinfo, portMAX_DELAY);
 
-  // obtain current stats
-  if (!xQueueReceive(QueueHandle, &fuelinfo, 0)) {
-    return;
-  }
+    // if on foot don't update
+    if (fuelinfo.flags.flags2 & edflags2::OnFoot) {
+      continue;
+    }
 
-  // if on foot don't update
-  if (fuelinfo.flags.flags2 & edflags2::OnFoot) {
-    return;
-  }
+    LOCK;
+    activescreen = lv_disp_get_scr_act(NULL);
+    RELEASE;
 
-  // if in srv set Main Tank = Res & Res = 0
-  if (fuelinfo.flags.flags & edflags::InSRV) {
-    fuelinfo.fuellevel = fuelinfo.reslevel;
-    fuelinfo.reslevel = 0;
-    fuelinfo.fuelcap = 0.45;
-  }
-  switch(fuelinfo.cmd) {
-    case cmdFuel:
-      f = fuelinfo.fuellevel;
-      fc = fuelinfo.fuelcap;
-      r = fuelinfo.reslevel;
-      rc = fuelinfo.rescap;
-      LOCK;
-      if (!fuelinfo.light) {
-        lv_obj_clear_flag(ui_cntDimmer, LV_OBJ_FLAG_HIDDEN);
-      } else {
-        lv_obj_add_flag(ui_cntDimmer, LV_OBJ_FLAG_HIDDEN);
-      }
-      RELEASE;
-      // basic sanity checks -- should really add a lot more
-      // if level > cap - set cap to level
-      if (f > fc) fc = f;
-      if (r > rc) rc = r;
+    // if in srv set Main Tank = Res & Res = 0
+    if (fuelinfo.flags.flags & edflags::InSRV) {
+      //fuelinfo.fuellevel = fuelinfo.reslevel;
+      fuelinfo.reslevel = 0;
+      fuelinfo.fuelcap = 0.5;
+    }
+    switch(fuelinfo.cmd) {
+      case cmdFuel:
+        f = fuelinfo.fuellevel;
+        fc = fuelinfo.fuelcap;
+        r = fuelinfo.reslevel;
+        rc = fuelinfo.rescap;
+        LOCK;
+        if (!fuelinfo.light) {
+          lv_obj_clear_flag(ui_cntDimmer, LV_OBJ_FLAG_HIDDEN);
+        } else {
+          lv_obj_add_flag(ui_cntDimmer, LV_OBJ_FLAG_HIDDEN);
+        }
+        RELEASE;
+        // basic sanity checks -- should really add a lot more
+        // if level > cap - set cap to level
+        if (f > fc) fc = f;
+        if (r > rc) rc = r;
 
-      LOCK;
-      // draw main tank bars
-      percentage = (uint8_t)((f/fc)*100);
-      lv_bar_set_value(ui_brMain, percentage, LV_ANIM_ON);
+        LOCK;
+        // draw main tank bars
+        percentage = (uint8_t)((f/fc)*100);
+        lv_bar_set_value(ui_brMain, percentage, LV_ANIM_ON);
 
-      // draw reservoir bar
-      percentage = (uint8_t)((r/rc)*100);
-      lv_bar_set_value(ui_brRes, percentage, LV_ANIM_ON);
+        // draw reservoir bar
+        percentage = (uint8_t)((r/rc)*100);
+        lv_bar_set_value(ui_brRes, percentage, LV_ANIM_ON);
 
-      // string values
-      fuelInfo = String(f,2)+"t";
-      lv_label_set_text(ui_lblMainFuel, fuelInfo.c_str());
-      fuelInfo = String(r,3)+"t";
-      lv_label_set_text(ui_lblResFuel, fuelInfo.c_str());
-      if (activescreen != ui_ScreenFuel) {
-         //lv_disp_load_scr(ui_ScreenFuel);
-         switchToScreen(ui_ScreenFuel);
-      }
-      RELEASE;
-      break;
-    case cmdWiFiConfig:
-      //lv_disp_load_scr(ui_screenWiFiConfig);
-      LOCK;
-      switchToScreen(ui_screenWiFiConfig);
-      RELEASE;
-      break;    
-    case cmdWaitingForStartup:
-      //lv_disp_load_scr(ui_screenWaitingForData);
-      LOCK;
-      switchToScreen(ui_screenWaitingForData);
-      RELEASE;
-      break;
+        // string values
+        fuelInfo = String(f,2)+"t";
+        lv_label_set_text(ui_lblMainFuel, fuelInfo.c_str());
+        fuelInfo = String(r,3)+"t";
+        lv_label_set_text(ui_lblResFuel, fuelInfo.c_str());
+        if (activescreen != ui_ScreenFuel) {
+          //lv_disp_load_scr(ui_ScreenFuel);
+          switchToScreen(ui_ScreenFuel);
+        }
+        RELEASE;
+        break;
+      case cmdWiFiConfig:
+        //lv_disp_load_scr(ui_screenWiFiConfig);
+        LOCK;
+        switchToScreen(ui_screenWiFiConfig);
+        RELEASE;
+        break;    
+      case cmdWaitingForStartup:
+        //lv_disp_load_scr(ui_screenWaitingForData);
+        LOCK;
+        switchToScreen(ui_screenWaitingForData);
+        RELEASE;
+        break;
+    }
   }
 }
 
@@ -603,8 +624,8 @@ void ledFlagBlink(void *parameter){
       blinking = true;
       fsdActivity = true;
       if (!(prevflags.flags & edflags::FsdCharging)) {
-        fsdchargetime = flags.flags2 & edflags2::HyperdriveCharging?10000:4000;
-        Serial.printf("Started CHarging %d\r\n", fsdchargetime);
+        fsdchargetime = (flags.flags2 & edflags2::HyperdriveCharging)?10000:4000;
+        Serial.printf("Started CHarging %d (flags:%d)\r\n", fsdchargetime, flags.flags2);
         LOCK;
         lv_arc_set_value(ui_spinCharging, 0);
         lv_obj_clear_flag(ui_spinCharging, LV_OBJ_FLAG_HIDDEN);

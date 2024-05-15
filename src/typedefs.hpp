@@ -3,7 +3,7 @@
 
 typedef struct {
   uint32_t flags;
-  uint16_t flags2;
+  uint32_t flags2;
   unsigned long cmdtime;
 } flags_t;
 
