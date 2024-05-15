@@ -1,0 +1,4 @@
+(18:11:34.964) [  5404][E][Wire.cpp:526] write(): NULL TX buffer pointer
+(18:11:34.970) [  5410][E][Wire.cpp:448] endTransmission(): NULL TX buffer pointer
+(18:11:34.976) [  5416][E][Wire.cpp:481] requestFrom(): NULL buffer pointer
+(18:11:34.981) [  5421][E][Wire.cpp:422] beginTransmission(): could not acquire lock
