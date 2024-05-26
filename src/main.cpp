@@ -10,10 +10,7 @@
 #include <WiFi.h>
 
 #include <uri/UriBraces.h>
-
-#include "CST820.h"
-#define LGFX_USE_V1      // set to use new version of library
-#include <LovyanGFX.hpp>
+#include <esp32_smartdisplay.h>
 
 #include "typedefs.hpp"
 #include <LittleFS.h>
@@ -25,74 +22,7 @@
 #define TFT_WIDTH 240
 #define TFT_HEIGHT 320
 
-#define I2C_SDA 21
-#define I2C_SCL 22
 
-CST820 touch(I2C_SDA, I2C_SCL, -1, -1); /* 触摸实例 */
-//CST820 touch(-1, -1, -1, -1);
-
-static lv_disp_draw_buf_t draw_buf;
-// static lv_color_t buf[TFT_WIDTH * 100];
-lv_indev_t *myInputDevice;
-
-class LGFX : public lgfx::LGFX_Device
-{
-
-    lgfx::Panel_ST7789 _panel_instance; // ST7789UI
-    lgfx::Bus_Parallel8 _bus_instance;  // MCU8080 8B
-
-
-public:
-    LGFX(void)
-    {
-        {
-            auto cfg = _bus_instance.config();
-            cfg.freq_write = 25000000;
-            cfg.pin_wr = 4;
-            cfg.pin_rd = 2;
-            cfg.pin_rs = 16;
-
-            cfg.pin_d0 = 15;
-            cfg.pin_d1 = 13;
-            cfg.pin_d2 = 12;
-            cfg.pin_d3 = 14;
-            cfg.pin_d4 = 27;
-            cfg.pin_d5 = 25;
-            cfg.pin_d6 = 33;
-            cfg.pin_d7 = 32;
-
-            _bus_instance.config(cfg);
-            _panel_instance.setBus(&_bus_instance);
-        }
-
-        {
-            auto cfg = _panel_instance.config();
-
-            cfg.pin_cs = 17;
-            cfg.pin_rst = -1;
-            cfg.pin_busy = -1;
-
-            cfg.panel_width = 240;
-            cfg.panel_height = 320;
-            cfg.offset_x = 0;
-            cfg.offset_y = 0;
-            cfg.offset_rotation = 0;
-            // cfg.dummy_read_pixel = 8;
-            // cfg.dummy_read_bits = 1;
-            cfg.readable = false;
-            cfg.invert = false;
-            cfg.rgb_order = false;
-            cfg.dlen_16bit = false;
-            cfg.bus_shared = true;
-
-            _panel_instance.config(cfg);
-        }
-
-        setPanel(&_panel_instance);
-    }
-};
-
-static LGFX display;
 
 // SSID & Password for inital wifi config
 const char thingName[] = "ED Fuel Gauge";
@@ -130,45 +60,6 @@ unsigned long scchargetime;
 unsigned long cooldowntime;
 uint8_t brightnesson;
 uint8_t brightnessoff;
-/*
-    lcd interface
-    transfer pixel data range to lcd
-*/
-void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
-{
-    int w = (area->x2 - area->x1 + 1);
-    int h = (area->y2 - area->y1 + 1);
-
-    display.startWrite();                            /* Start new TFT transaction */
-    display.setAddrWindow(area->x1, area->y1, w, h); /* set the working window */
-    display.writePixels(&color_p->full, w * h,false);//true
-
-    display.endWrite();            /* terminate TFT transaction */
-    lv_disp_flush_ready(disp); /* tell lvgl that flushing is done */
-}
-
-void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
-{
-
-    bool touched;
-    uint8_t gesture;
-    uint16_t touchX, touchY;
-
-    touched = touch.getTouch(&touchX, &touchY, &gesture);
-
-    if (!touched)
-    {
-        data->state = LV_INDEV_STATE_REL;
-    }
-    else
-    {
-        data->state = LV_INDEV_STATE_PR;
-
-        /*Set the coordinates*/
-        data->point.x = touchX;
-        data->point.y = touchY;
-    }
-}
 
 
 void setup() {
@@ -178,9 +69,9 @@ void setup() {
   digitalWrite(0, HIGH);
 
   // pin 0 is scren backlight as well
-  ledcSetup(0, 12000, 8);
-  ledcAttachPin(0, 0);
-  ledcWrite(0, 255);
+  //ledcSetup(0, 12000, 8);
+  //ledcAttachPin(0, 0);
+  //ledcWrite(0, 255);
 
   //pinMode(2, OUTPUT);
   //digitalWrite(2, HIGH);
@@ -200,44 +91,8 @@ void setup() {
 
 //  Serial.begin(115200);
 //  while(!Serial) delay(10);
+  smartdisplay_init();
 
-  lv_init();
-  
-  display.init();
-
-  touch.begin();
-
-  display.fillScreen(TFT_BLACK);
-
-  lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(TFT_HEIGHT * 150 * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-  lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(TFT_HEIGHT * 150 * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-
-  lv_disp_draw_buf_init(&draw_buf, buf1, buf2, TFT_HEIGHT * 150);
-
-  // initialise the display
-  static lv_disp_drv_t disp_drv;
-  lv_disp_drv_init(&disp_drv);
-
-  // settings for display driver
-  disp_drv.hor_res = TFT_WIDTH;
-  disp_drv.ver_res = TFT_HEIGHT;
-  disp_drv.flush_cb = my_disp_flush;
-  disp_drv.draw_buf = &draw_buf;
-  //disp_drv.rotated = LV_DISP_ROT_180;
-  lv_disp_drv_register(&disp_drv);
-  
-
-  // initialise touch
-  static lv_indev_drv_t indev_drv;
-  lv_indev_drv_init(&indev_drv);
-  indev_drv.type = LV_INDEV_TYPE_POINTER;
-  indev_drv.read_cb = my_touchpad_read;
-  lv_indev_drv_register(&indev_drv);
-
-  display.setTextSize((std::max(display.width(), display.height()) + 255) >> 8);
-  
-
-  display.fillScreen(TFT_BLACK);
   ui_init();
 
   String passset = String(lv_label_get_text(ui_lblWifiInfo));
@@ -335,19 +190,22 @@ void setup() {
     fuel_info.light = (value == "on"?true:false);
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     if (fuel_info.light) {
-      ledcWrite(0, brightnesson);
+    //  ledcWrite(0, brightnesson);
+      smartdisplay_lcd_set_backlight((float)brightnesson/255.0);
     } else {
-      ledcWrite(0, brightnessoff);
+    //  ledcWrite(0, brightnessoff);
+    smartdisplay_lcd_set_backlight((float)brightnessoff/255.0);
     }
+    
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });  
   // backlight brightness control 0-255
   server.on("/bright", []() {
     if (server.hasArg("level")) {
-      int level = server.arg("level").toInt();
+      float level = server.arg("level").toFloat();
       if (level > 255) level= 255;
       if (level < 0) level = 0;
-      ledcWrite(0, level);
+      smartdisplay_lcd_set_backlight((float)(level/255.0));
     }
     if (server.hasArg("on")) {
       int level = server.arg("on").toInt();
@@ -508,6 +366,7 @@ void loop() {
     LOCK;
     lv_timer_handler();
     RELEASE;
+    
 }
 
 
