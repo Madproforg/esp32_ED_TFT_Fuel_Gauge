@@ -1,0 +1,1 @@
+Fuel gauge for Elite Dangerous using an ESP32-2432S022 from AliExpress
