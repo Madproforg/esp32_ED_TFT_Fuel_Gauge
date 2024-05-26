@@ -9,12 +9,6 @@
 #include <IotWebConf.h>
 #include <WiFi.h>
 
-// configure uploading via wifi from PlatformIO
-#include <ArduinoOTA.h>
-
-// firmware.bin upload via web browser
-#include <ElegantOTA.h>
-
 #include <uri/UriBraces.h>
 
 #include "CST820.h"
@@ -23,6 +17,7 @@
 
 #include "typedefs.hpp"
 #include <LittleFS.h>
+#include <Preferences.h>
 #include "ed_flag_helpers.hpp"
 
 #define switchToScreen(x) lv_scr_load_anim(x, LV_SCR_LOAD_ANIM_OVER_RIGHT, 2000, 50, false)
@@ -110,12 +105,11 @@ fueldata_t fuel_info = {6, 32.0, 0.25, 0.25, true, 0 ,0, 0, cmdWiFiConfig};
 
 
 // Task handles, functions and info queue
-TaskHandle_t  tskOTA, tskBlink, tskDisplay;
+TaskHandle_t  tskBlink, tskDisplay;
 QueueHandle_t QueueHandle, quFlags, mutex;
 #define LOCK xSemaphoreTake(mutex, portMAX_DELAY)
 #define RELEASE xSemaphoreGive(mutex)
 
-void doOTA(void *parameter);
 void updateDisplay(void *parameter);
 void ledFlagBlink(void * parameter);
 
@@ -129,6 +123,13 @@ DNSServer dnsServer;
 WebServer server(80);
 IotWebConf iotWebConf(thingName, &dnsServer, &server, wifiInitialApPassword);
 
+// Save values for hypercharge, sc charge and cooldown times
+Preferences preferences;
+unsigned long hyperchargetime;
+unsigned long scchargetime;
+unsigned long cooldowntime;
+uint8_t brightnesson;
+uint8_t brightnessoff;
 /*
     lcd interface
     transfer pixel data range to lcd
@@ -171,21 +172,34 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data)
 
 
 void setup() {
-// the only pins available (0 and 2), are shared
+// the only pins available (0), are shared
 // with the bootloader, so always set them HIGH at power-up
   pinMode(0, OUTPUT);
   digitalWrite(0, HIGH);
-  pinMode(2, OUTPUT);
-  digitalWrite(2, HIGH);
 
-  
+  // pin 0 is scren backlight as well
+  ledcSetup(0, 12000, 8);
+  ledcAttachPin(0, 0);
+  ledcWrite(0, 255);
+
+  //pinMode(2, OUTPUT);
+  //digitalWrite(2, HIGH);
+
+  preferences.begin("EDFuelLCD",false);
+  hyperchargetime = preferences.getULong("hyperchargetime", 15000);
+  scchargetime = preferences.getULong("scchargetime", 4000);
+  cooldowntime = preferences.getULong("cooldowntime", 6000);
+  brightnesson = preferences.getUChar("brightnesson", 255);
+  brightnessoff = preferences.getUChar("brightnessoff", 50);
+
   mutex = xSemaphoreCreateMutex();
   unsigned long cmills;
   unsigned long pmills;
 
   WiFi.mode(WIFI_STA);
-  Serial.begin(115200);
-  while(!Serial) delay(10);
+
+//  Serial.begin(115200);
+//  while(!Serial) delay(10);
 
   lv_init();
   
@@ -209,7 +223,7 @@ void setup() {
   disp_drv.ver_res = TFT_HEIGHT;
   disp_drv.flush_cb = my_disp_flush;
   disp_drv.draw_buf = &draw_buf;
-  //disp_drv.rotated = LV_DISP_ROT_90;
+  //disp_drv.rotated = LV_DISP_ROT_180;
   lv_disp_drv_register(&disp_drv);
   
 
@@ -229,30 +243,32 @@ void setup() {
   String passset = String(lv_label_get_text(ui_lblWifiInfo));
   passset.replace("*PASS*", wifiInitialApPassword);
   lv_label_set_text(ui_lblWifiInfo, passset.c_str());
-  Serial.print("ss");
+//  Serial.print("ss");
   lv_disp_load_scr(ui_screenWiFiConfig);
   lv_obj_add_flag(ui_lblWifiInfo, LV_OBJ_FLAG_HIDDEN);
   lv_timer_handler();
-  Serial.print("se");
+
+//  Serial.print("se");
     // queues for passing info between tasks
   QueueHandle = xQueueCreate(10, sizeof(fueldata_t));
-  quFlags = xQueueCreate(10, sizeof(flags_t));
+  //quFlags = xQueueCreate(1, sizeof(flags_t));
+  quFlags = xSemaphoreCreateMutex();
 
   // Check if the queue was successfully created
   if (QueueHandle == NULL || quFlags == NULL) {
-    Serial.println("Queue could not be created. Halt.");
+//    Serial.println("Queue could not be created. Halt.");
     while (1) {
       delay(1000);  // Halt at this point as is not possible to continue
     }
   }
   
   if (!LittleFS.begin(false, "/littlefs")) {
-    Serial.print("Error opening storage filesystem");
+//    Serial.print("Error opening storage filesystem");
   }
   if (LittleFS.exists("/img/elite-dangerous-logo.png")) {
-    Serial.println("Logo found");
+//    Serial.println("Logo found");
   } else {
-    Serial.println("Logo NOT found");
+//    Serial.println("Logo NOT found");
   }
 
   // -- Initializing wifi configuration.
@@ -274,7 +290,7 @@ void setup() {
     fuel_info.fuellevel = value.toFloat();
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-    Serial.printf("New Fuel Level = %0.2f\r\n", fuel_info.fuellevel);
+//    Serial.printf("New Fuel Level = %0.2f\r\n", fuel_info.fuellevel);
     //handleRoot();
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
@@ -285,7 +301,7 @@ void setup() {
     fuel_info.fuelcap = value.toFloat();
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-    Serial.printf("New Fuel Capacity = %0.2f\r\n", fuel_info.fuelcap);
+//    Serial.printf("New Fuel Capacity = %0.2f\r\n", fuel_info.fuelcap);
     //handleRoot();
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
@@ -296,7 +312,7 @@ void setup() {
     fuel_info.reslevel = value.toFloat();
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-    Serial.printf("New res Level = %0.2f\r\n", fuel_info.fuellevel);
+//    Serial.printf("New res Level = %0.2f\r\n", fuel_info.fuellevel);
     //handleRoot();
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
@@ -307,7 +323,7 @@ void setup() {
     fuel_info.rescap = value.toFloat();
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-    Serial.printf("New res cap = %0.2f\r\n", fuel_info.fuellevel);
+//    Serial.printf("New res cap = %0.2f\r\n", fuel_info.fuellevel);
     //handleRoot();
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
@@ -318,11 +334,45 @@ void setup() {
     value.toLowerCase();
     fuel_info.light = (value == "on"?true:false);
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
-    xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-    //handleRoot();
+    if (fuel_info.light) {
+      ledcWrite(0, brightnesson);
+    } else {
+      ledcWrite(0, brightnessoff);
+    }
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });  
+  // backlight brightness control 0-255
+  server.on("/bright", []() {
+    if (server.hasArg("level")) {
+      int level = server.arg("level").toInt();
+      if (level > 255) level= 255;
+      if (level < 0) level = 0;
+      ledcWrite(0, level);
+    }
+    if (server.hasArg("on")) {
+      int level = server.arg("on").toInt();
+      if (level > 255) level= 255;
+      if (level < 0) level = 0;
+      brightnesson = level;
+      preferences.putUChar("brightnesson", level);
+    }
+    if (server.hasArg("off")) {
+      int level = server.arg("off").toInt();
+      if (level > 255) level= 255;
+      if (level < 0) level = 0;
+      brightnessoff = level;
+      preferences.putUChar("brightnessoff", level);
 
+    }
+    String responseText = "<html><head></head><body><p><b>Current Brightness settings</b><br/>On = "
+      +String(brightnesson)
+      +"<br/>Off = " + String(brightnessoff)
+      +"</p><hr/><p>setting values<br/>?level=[0-255] - set current level<br/>"
+      +"?on=[0-255]  - set on level<br/>"
+      +"?off=[0-255] - set off level</p></body></html>";
+    server.send(200, "text/html", responseText);
+
+  });
   // level & light update in one get request
   server.on("/data", []() {
     fuel_info.fuellevel = server.arg("fuel").toFloat();
@@ -330,11 +380,11 @@ void setup() {
     fuel_info.fuelcap = server.arg("fueltank").toFloat();
     fuel_info.rescap = server.arg("restank").toFloat();
     String value =  server.arg("light");
-    Serial.printf("args\r\nfuel: %s\r\nres: %s\r\nfueltank: %s\r\nrestank: %s\r\n------\r\n", 
-        server.arg("fuel"), 
-        server.arg("res"), 
-        server.arg("fueltank"),
-        server.arg("restank"));
+//    Serial.printf("args\r\nfuel: %s\r\nres: %s\r\nfueltank: %s\r\nrestank: %s\r\n------\r\n", 
+//        server.arg("fuel"), 
+//        server.arg("res"), 
+//        server.arg("fueltank"),
+//        server.arg("restank"));
     value.toLowerCase();
     fuel_info.light = (value=="on"?true:false);
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
@@ -345,12 +395,17 @@ void setup() {
 
   // flags
   server.on("/flags", []() {
+    xSemaphoreTake(quFlags, portMAX_DELAY);
     flag_info.flags = server.arg("flags").toInt();
+    xSemaphoreGive(quFlags);
     flag_info.flags2 = server.arg("flags2").toInt();
     flag_info.cmdtime = millis();
     memcpy(&fuel_info.flags, &flag_info, sizeof(flags_t));
-    xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-    xQueueSend(quFlags, &flag_info, portMAX_DELAY);
+    /*xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
+    while (!xQueueSend(quFlags, &flag_info, 0)) {
+      flags_t flagdump;
+      xQueueReceive(quFlags, &flagdump, 0);
+    }*/
     //handleRoot();
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
 });
@@ -380,29 +435,38 @@ void setup() {
     //handleRoot();
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
-  // platformio OTA enable
-  server.on("/OTA",[]() {
-    server.send(200,"text/html",
-      R"(<!DOCTYPE html><html>
-        <head><title>ED Fuel Gauge OTA</title></head>
-        <body><h1>OTA ACTIVE</h1><p>power off and on to abort<p></body></html>)"
-    );
-    server.stop();
-    server.close();
-    // start OTA task as high priority then kill this task
-    Serial.println("----\r\nOTA NOW ACTIVE\r\n----");
-    xTaskCreatePinnedToCore(
-      doOTA,
-      "OTA On",
-      10000,
-      NULL,
-      2,
-      &tskOTA,
-      xPortGetCoreID()
-    );
-    vTaskDelete(NULL);
-  });
   // -- End of URL handlers
+
+  server.on("/timers",[]() {
+    if (server.hasArg("hyper")) {
+      xSemaphoreTake(quFlags, portMAX_DELAY);
+      hyperchargetime = server.arg("hyper").toInt();
+      preferences.putULong("hyperchargetime",hyperchargetime);
+      xSemaphoreGive(quFlags);
+    }
+    if (server.hasArg("super")) {
+      xSemaphoreTake(quFlags, portMAX_DELAY);
+      scchargetime = server.arg("super").toInt();
+      preferences.putULong("scchargetime",scchargetime);
+      xSemaphoreGive(quFlags);
+    }
+    if (server.hasArg("cool")) {
+      xSemaphoreTake(quFlags, portMAX_DELAY);
+      cooldowntime = server.arg("cool").toInt();
+      preferences.putULong("cooldowntime",cooldowntime);
+      xSemaphoreGive(quFlags);
+    }
+    xSemaphoreTake(quFlags, portMAX_DELAY);
+    String responsetext = "<html><head></head><body><p><b>Current timers</b><br/>hyper = " 
+      + String(hyperchargetime)
+      +"<br/>super = " + String(scchargetime)
+      +"</br>cool = " + String(cooldowntime)
+      +"</p></body></html>";
+    xSemaphoreGive(quFlags);
+    server.send(200,"text/html",responsetext);
+
+  });
+
 
   // wait for connection to WiFi
   cmills = millis();
@@ -420,6 +484,7 @@ void setup() {
   passset = String(lv_label_get_text(ui_lblWaiting));
   passset.replace("*IP*", myIpAddress);
   lv_label_set_text(ui_lblWaiting, passset.c_str());
+
   //lv_disp_load_scr(ui_screenWaitingForData);
   //lv_scr_load_anim(ui_screenWaitingForData, LV_SCR_LOAD_ANIM_OVER_RIGHT, 2000, 50, false);
   switchToScreen(ui_screenWaitingForData);
@@ -427,18 +492,17 @@ void setup() {
   fuel_info.cmd = cmdFuel;
 
   memset(&flag_info, 0, sizeof(flags_t));
-  xQueueSend(quFlags, &flag_info, 1);
+  
+  //xQueueSend(quFlags, &flag_info, 1);
 
-  ElegantOTA.begin(&server);    // Start ElegantOTA
   xTaskCreatePinnedToCore( ledFlagBlink, "blink", 3000, NULL, 1, &tskBlink, xPortGetCoreID() );
   xTaskCreatePinnedToCore( updateDisplay, "display", 3000, NULL, 1, &tskDisplay, xPortGetCoreID() );
-  Serial.println("Ready.");
+//  Serial.println("Ready.");
 }
 
 
 void loop() {
     iotWebConf.doLoop();
-    ElegantOTA.loop();
     //updateDisplay(NULL);
     //ledFlagBlink(NULL);
     LOCK;
@@ -446,44 +510,6 @@ void loop() {
     RELEASE;
 }
 
-void doOTA(void *parameter){
-ArduinoOTA.setHostname("EDFuelGauge-OTA");
-    ArduinoOTA
-    .onStart([]() {
-      String type;
-      if (ArduinoOTA.getCommand() == U_FLASH) {
-        type = "sketch";
-      } else {  // U_SPIFFS
-        type = "filesystem";
-      }
-
-      // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
-      Serial.println("Start updating " + type);
-    })
-    .onEnd([]() {
-      Serial.println("\nEnd");
-    })
-    .onProgress([](unsigned int progress, unsigned int total) {
-      Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-    })
-    .onError([](ota_error_t error) {
-      Serial.printf("Error[%u]: ", error);
-      if (error == OTA_AUTH_ERROR) {
-        Serial.println("Auth Failed");
-      } else if (error == OTA_BEGIN_ERROR) {
-        Serial.println("Begin Failed");
-      } else if (error == OTA_CONNECT_ERROR) {
-        Serial.println("Connect Failed");
-      } else if (error == OTA_RECEIVE_ERROR) {
-        Serial.println("Receive Failed");
-      } else if (error == OTA_END_ERROR) {
-        Serial.println("End Failed");
-      }
-    });
-    ArduinoOTA.begin();
-    
-    while(1) ArduinoOTA.handle();
-}
 
 void updateDisplay(void *parameter){
   float f, fc, r, rc;
@@ -513,17 +539,17 @@ void updateDisplay(void *parameter){
     }
     switch(fuelinfo.cmd) {
       case cmdFuel:
+        if (activescreen != ui_ScreenFuel) {
+          //lv_disp_load_scr(ui_ScreenFuel);
+          LOCK;
+          switchToScreen(ui_ScreenFuel);
+          RELEASE;
+        }
         f = fuelinfo.fuellevel;
         fc = fuelinfo.fuelcap;
         r = fuelinfo.reslevel;
         rc = fuelinfo.rescap;
-        LOCK;
-        if (!fuelinfo.light) {
-          lv_obj_clear_flag(ui_cntDimmer, LV_OBJ_FLAG_HIDDEN);
-        } else {
-          lv_obj_add_flag(ui_cntDimmer, LV_OBJ_FLAG_HIDDEN);
-        }
-        RELEASE;
+
         // basic sanity checks -- should really add a lot more
         // if level > cap - set cap to level
         if (f > fc) fc = f;
@@ -572,21 +598,15 @@ void ledFlagBlink(void *parameter){
   bool fsdActivity = false;
   static uint16_t fsdchargetime;
 
+
   flags_t flags;
   static flags_t prevflags = {0,0};
   for(;;){
-    if (!xQueueReceive(quFlags, &flags, 0)) {
-      if (!blinking){
-        //memcpy(&prevflags, &flags, sizeof(flags_t));
-        continue;
-      } else {
-        //Serial.println("No queue item but blinking");
-      }
-      memcpy(&flags, &prevflags, sizeof(flags_t));
-    } else {
-
-      //Serial.printf("Flags: %d\r\n", flags.flags & edflags::FsdCooldown);
+    if (xSemaphoreTake(quFlags, 5)) {
+      memcpy(&flags, &flag_info, sizeof(flags_t));
+      xSemaphoreGive(quFlags);
     }
+    //memcpy(&flags, &prevflags, sizeof(flags_t));
     currentMs = millis();
     blinking = false;
     fsdActivity = false;
@@ -624,8 +644,10 @@ void ledFlagBlink(void *parameter){
       blinking = true;
       fsdActivity = true;
       if (!(prevflags.flags & edflags::FsdCharging)) {
-        fsdchargetime = (flags.flags2 & edflags2::HyperdriveCharging)?10000:4000;
-        Serial.printf("Started CHarging %d (flags:%d)\r\n", fsdchargetime, flags.flags2);
+        xSemaphoreTake(quFlags, portMAX_DELAY);
+        fsdchargetime = (flags.flags2 & edflags2::HyperdriveCharging)?hyperchargetime:scchargetime;
+        xSemaphoreGive(quFlags);
+//        Serial.printf("Started CHarging %d (flags:%d)\r\n", fsdchargetime, flags.flags2);
         LOCK;
         lv_arc_set_value(ui_spinCharging, 0);
         lv_obj_clear_flag(ui_spinCharging, LV_OBJ_FLAG_HIDDEN);
@@ -650,14 +672,16 @@ void ledFlagBlink(void *parameter){
       blinking = true;
       fsdActivity = true;
       if (!(prevflags.flags & edflags::FsdCooldown)) {
-        Serial.println("cooldown");      
+//        Serial.println("cooldown");      
         LOCK;
         lv_arc_set_value(ui_spinCharging, 100);
         RELEASE;
         currentPercent = 100;
         msCooldown = flags.cmdtime;
       }
-      currentPercent = 100-(uint16_t)(((currentMs-msCooldown)*100)/10000);  // should be 10s
+      xSemaphoreTake(quFlags, portMAX_DELAY);
+      currentPercent = 100-(uint16_t)(((currentMs-msCooldown)*100)/cooldowntime);  // should be 10s
+      xSemaphoreGive(quFlags);
       if (currentPercent < 0) {
         currentPercent = 100;
         msCooldown = currentMs;
@@ -673,9 +697,10 @@ void ledFlagBlink(void *parameter){
       if (!(prevflags.flags & edflags::FsdJump)) {
         LOCK;
         lv_arc_set_value(ui_spinCharging, 100);
+        lv_obj_clear_flag(ui_spinCharging, LV_OBJ_FLAG_HIDDEN);
         RELEASE;
       }
-      blinking = true;
+      /*blinking = true;
       if (currentMs - msJumping > 500) {
         spinVisible = !spinVisible;
         LOCK;
@@ -686,7 +711,7 @@ void ledFlagBlink(void *parameter){
         }
         RELEASE;
         msJumping = currentMs;
-      }
+      }*/
     }
 
     if ( !(flags.flags & edflags::FsdJump)) {
@@ -700,12 +725,6 @@ void ledFlagBlink(void *parameter){
 
     }
     memcpy(&prevflags, &flags, sizeof(flags_t));
-    flags_t  peekedflags;
-    if (xQueuePeek(quFlags, &peekedflags, 0)) {
-      if (!memcmp(&prevflags, &peekedflags, sizeof(flags_t))) {
-        xQueueReceive(quFlags, &peekedflags, 0);
-      } 
-    }
   }
 }
 
@@ -746,12 +765,12 @@ void sendHTML() {
           <li>/restank/??.??   - resrv tank size</li>
           <li>/light/[<a href="/light/on">on</a> | <a href="/light/off">off</a>]  - screen dimmer of or on</p>
           <p>single url version<br/>/data?fuel=&lt;value&gt;&res=&lt;value&gt;&fueltank=&lt;value&gt;&restank=&lt;value&gt;&light=[on|off]</p>
-          <p>Extra Info bits - status.json flag values<br/>/flags?flags=&lt;value&gt;&flags2=&lt;value&gt;<br/>
+          <p><b>Extra Info bits</b><br/>/name?name=&lt;text&gt;  - update name at top of fuel display<br /> - status.json flag values<br/>/flags?flags=&lt;value&gt;&flags2=&lt;value&gt;<br/>
           <hr /><h2>Extra functions</h2>
           <ul><li>/reboot - <b>reboot without confirmation</b></li>
           <li><a href="/config">/config</a> - WiFi configuration</li>
-          <li><a href="/OTA">/OTA</a> - enable OTA uploading from platformio</li>
-          <li><a href="/update">/update</a> - Manual Firmware upload</li>
+          <li><a href="/timers">Jump/cooldown timers for the arc</a></li>
+          <li><a href="/bright">On/Off backlight levels</a></li>
           </ul>
           
           </body></html>

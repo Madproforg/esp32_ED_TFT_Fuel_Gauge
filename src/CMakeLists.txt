@@ -1,6 +1,10 @@
-SET(SOURCES screens/ui_ScreenFuel.c
+SET(SOURCES components/ui_comp_textbutton.c
+    components/ui_comp.c
+    screens/ui_ScreenFuel.c
     screens/ui_screenWiFiConfig.c
     screens/ui_screenWaitingForData.c
+    screens/ui_screenButtons.c
+    screens/ui_scrPloatformioOTA.c
     ui.c
     components/ui_comp_hook.c
     ui_helpers.c

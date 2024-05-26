@@ -3,17 +3,14 @@
 // LVGL version: 8.3.11
 // Project name: EdFuelspj
 
-#ifndef _UI_EVENTS_H
-#define _UI_EVENTS_H
+#ifndef _EDFUELSPJ_UI_COMP_HOOK_H
+#define _EDFUELSPJ_UI_COMP_HOOK_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void evtHandle_btnStream(lv_event_t * e);
-void evtHandle_btnRecord(lv_event_t * e);
-void evtHandle_btnReplay(lv_event_t * e);
-void evtHandle_btnReplaySave(lv_event_t * e);
+void ui_comp_TextButton_create_hook(lv_obj_t * comp);
 
 #ifdef __cplusplus
 } /*extern "C"*/

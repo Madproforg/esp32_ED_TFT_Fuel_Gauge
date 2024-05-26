@@ -13,6 +13,8 @@ extern "C" {
 #include "lvgl.h"
 
 #include "ui_helpers.h"
+#include "components/ui_comp.h"
+#include "components/ui_comp_hook.h"
 #include "ui_events.h"
 
 // SCREEN: ui_ScreenFuel
@@ -54,6 +56,24 @@ extern lv_obj_t * ui_Panel2;
 extern lv_obj_t * ui_Label5;
 extern lv_obj_t * ui_Panel5;
 extern lv_obj_t * ui_lblWaiting;
+// SCREEN: ui_screenButtons
+void ui_screenButtons_screen_init(void);
+extern lv_obj_t * ui_screenButtons;
+void ui_event_btnStream_TextButton(lv_event_t * e);
+extern lv_obj_t * ui_btnStream;
+void ui_event_TextButton1_TextButton(lv_event_t * e);
+extern lv_obj_t * ui_TextButton1;
+void ui_event_TextButton2_TextButton(lv_event_t * e);
+extern lv_obj_t * ui_TextButton2;
+void ui_event_TextButton3_TextButton(lv_event_t * e);
+extern lv_obj_t * ui_TextButton3;
+// SCREEN: ui_scrPloatformioOTA
+void ui_scrPloatformioOTA_screen_init(void);
+extern lv_obj_t * ui_scrPloatformioOTA;
+void ui_event_Panel8(lv_event_t * e);
+extern lv_obj_t * ui_Panel8;
+extern lv_obj_t * ui_Label6;
+extern lv_obj_t * ui_lblPlatformIOOTA;
 extern lv_obj_t * ui____initial_actions0;
 
 

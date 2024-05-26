@@ -3,3 +3,8 @@
 // LVGL version: 8.3.11
 // Project name: EdFuelspj
 
+#include "../ui.h"
+
+void ui_comp_TextButton_create_hook(lv_obj_t * comp)
+{
+}
