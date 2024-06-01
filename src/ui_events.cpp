@@ -2,25 +2,72 @@
 // SquareLine Studio version: SquareLine Studio 1.4.0
 // LVGL version: 8.3.11
 // Project name: EdFuelspj
-
 #include "ui.h"
 
-void evtHandle_btnStream(lv_event_t * e)
+#include <Preferences.h>
+#include <esp32_smartdisplay.h>
+
+extern uint8_t brightnesson;
+extern uint8_t brightnessoff;
+extern Preferences preferences;
+
+lv_obj_t * fromscreen;
+
+void procBtnsShow(lv_event_t * e)
 {
-	// Your code here
+	// Set arcs to current values
+	uint8_t  bonval = preferences.getUChar("brightnesson", 255);
+  	uint8_t boffval = preferences.getUChar("brightnessoff", 50);
+	lv_arc_set_value(ui_screenButtons_arcBOn, bonval);
+	lv_arc_set_value(ui_screenButtons_arcBOff, boffval);
 }
 
-void evtHandle_btnRecord(lv_event_t * e)
+void procArcBOnChanged(lv_event_t * e)
 {
-	// Your code here
+	float newval = (float)lv_arc_get_value(ui_screenButtons_arcBOn)/255.0;
+	smartdisplay_lcd_set_backlight(newval);
 }
 
-void evtHandle_btnReplay(lv_event_t * e)
+void procArcBOffChanged(lv_event_t * e)
 {
-	// Your code here
+	float newval = (float)lv_arc_get_value(ui_screenButtons_arcBOff)/255.0;
+	smartdisplay_lcd_set_backlight(newval);
 }
 
-void evtHandle_btnReplaySave(lv_event_t * e)
+void lblBOnCB(lv_event_t * e)
 {
-	// Your code here
+	smartdisplay_lcd_set_backlight((float)brightnesson/255.0);
+}
+
+void lblBOffCB(lv_event_t * e)
+{
+	smartdisplay_lcd_set_backlight((float)brightnessoff/255.0);
+}
+
+void prevScreenFuel(lv_event_t * e)
+{
+	fromscreen = ui_ScreenFuel;
+}
+
+void setFromScreenWaiting(lv_event_t * e)
+{
+	fromscreen = ui_screenWaitingForData;
+}
+
+void procscrbtnsGesture(lv_event_t * e)
+{
+    lv_event_code_t event_code = lv_event_get_code(e);
+    lv_obj_t * target = lv_event_get_target(e);
+    if(event_code == LV_EVENT_GESTURE &&  lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_LEFT) {
+        lv_indev_wait_release(lv_indev_get_act());
+        _ui_screen_change(&fromscreen, LV_SCR_LOAD_ANIM_MOVE_LEFT, 500, 0, &ui_screenWaitingForData_screen_init);
+    }
+}
+
+void procBtnsSave(lv_event_t * e)
+{
+	uint8_t bonval = lv_arc_get_value(ui_screenButtons_arcBOn);
+  	uint8_t boffval = lv_arc_get_value(ui_screenButtons_arcBOff);
+	preferences.putUChar("brightnesson", bonval);
+  	preferences.putUChar("brightnessoff", boffval);
 }

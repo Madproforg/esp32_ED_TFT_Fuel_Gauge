@@ -1,4 +1,5 @@
 #include <Arduino.h>
+//#include <gpio_viewer.h>
 
 #include <lvgl.h>
 
@@ -13,16 +14,16 @@
 #include <esp32_smartdisplay.h>
 
 #include "typedefs.hpp"
-#include <LittleFS.h>
+//#include <LittleFS.h>
 #include <Preferences.h>
 #include "ed_flag_helpers.hpp"
-
+#include "edlogo.hpp"
 #define switchToScreen(x) lv_scr_load_anim(x, LV_SCR_LOAD_ANIM_OVER_RIGHT, 2000, 50, false)
 
-#define TFT_WIDTH 240
-#define TFT_HEIGHT 320
-
-
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <WebSerial.h>
+AsyncWebServer monitor(8080);
 
 // SSID & Password for inital wifi config
 const char thingName[] = "ED Fuel Gauge";
@@ -51,6 +52,7 @@ void sendHTML();
 
 DNSServer dnsServer;
 WebServer server(80);
+
 IotWebConf iotWebConf(thingName, &dnsServer, &server, wifiInitialApPassword);
 
 // Save values for hypercharge, sc charge and cooldown times
@@ -61,20 +63,13 @@ unsigned long cooldowntime;
 uint8_t brightnesson;
 uint8_t brightnessoff;
 
+//GPIOViewer gpiodisplay;
 
 void setup() {
 // the only pins available (0), are shared
 // with the bootloader, so always set them HIGH at power-up
   pinMode(0, OUTPUT);
   digitalWrite(0, HIGH);
-
-  // pin 0 is scren backlight as well
-  //ledcSetup(0, 12000, 8);
-  //ledcAttachPin(0, 0);
-  //ledcWrite(0, 255);
-
-  //pinMode(2, OUTPUT);
-  //digitalWrite(2, HIGH);
 
   preferences.begin("EDFuelLCD",false);
   hyperchargetime = preferences.getULong("hyperchargetime", 15000);
@@ -89,46 +84,46 @@ void setup() {
 
   WiFi.mode(WIFI_STA);
 
-//  Serial.begin(115200);
-//  while(!Serial) delay(10);
+  Serial.begin(115200);
+  while(!Serial) delay(10);
   smartdisplay_init();
 
   ui_init();
 
-  String passset = String(lv_label_get_text(ui_lblWifiInfo));
+  String passset = String(lv_label_get_text(ui_screenWiFiConfig_lblWifiInfo));
   passset.replace("*PASS*", wifiInitialApPassword);
-  lv_label_set_text(ui_lblWifiInfo, passset.c_str());
-//  Serial.print("ss");
+  lv_label_set_text(ui_screenWiFiConfig_lblWifiInfo, passset.c_str());
   lv_disp_load_scr(ui_screenWiFiConfig);
-  lv_obj_add_flag(ui_lblWifiInfo, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(ui_screenWiFiConfig_lblWifiInfo, LV_OBJ_FLAG_HIDDEN);
   lv_timer_handler();
 
-//  Serial.print("se");
     // queues for passing info between tasks
   QueueHandle = xQueueCreate(10, sizeof(fueldata_t));
-  //quFlags = xQueueCreate(1, sizeof(flags_t));
   quFlags = xSemaphoreCreateMutex();
 
   // Check if the queue was successfully created
   if (QueueHandle == NULL || quFlags == NULL) {
-//    Serial.println("Queue could not be created. Halt.");
+    Serial.println("Queue could not be created. Halt.");
     while (1) {
       delay(1000);  // Halt at this point as is not possible to continue
     }
   }
   
-  if (!LittleFS.begin(false, "/littlefs")) {
-//    Serial.print("Error opening storage filesystem");
+  /*if (!LittleFS.begin(false, "/littlefs")) {
+    Serial.print("Error opening storage filesystem");
   }
+  
   if (LittleFS.exists("/img/elite-dangerous-logo.png")) {
-//    Serial.println("Logo found");
+    Serial.println("Logo found");
   } else {
-//    Serial.println("Logo NOT found");
-  }
+    Serial.println("Logo NOT found");
+  }*/
+  
 
   // -- Initializing wifi configuration.
   iotWebConf.init();
   iotWebConf.setApTimeoutMs(200);
+
 
   // -- Set up required URL handlers on the web server.
   server.on("/", handleRoot);
@@ -137,16 +132,22 @@ void setup() {
   // treat unknown pages as asking for /
   server.onNotFound([](){ handleRoot(); });
   // img files
-  server.serveStatic("/img", LittleFS, "/img/");
+  //server.serveStatic("/img", LittleFS, "/img/");
+  server.on(UriBraces("/img/{}"), []() {
+    server.sendContent((const char *)edlogo.data, edlogo.len);
+  });
+  /*server.on("/favicon.ico", [] {
+    server.send(200,edlogo.mime, (const char *)edlogo.data);
+  });*/
 
   // fuel level update
   server.on(UriBraces("/fuel/{}"), []() {
     String value = server.pathArg(0);
     fuel_info.fuellevel = value.toFloat();
+    fuel_info.cmd = cmdFuel;
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-//    Serial.printf("New Fuel Level = %0.2f\r\n", fuel_info.fuellevel);
-    //handleRoot();
+    WebSerial.printf("New Fuel Level = %0.2f\r\n", fuel_info.fuellevel);
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
 
@@ -154,10 +155,10 @@ void setup() {
   server.on(UriBraces("/fueltank/{}"), []() {
     String value = server.pathArg(0);
     fuel_info.fuelcap = value.toFloat();
+    fuel_info.cmd = cmdFuel;
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-//    Serial.printf("New Fuel Capacity = %0.2f\r\n", fuel_info.fuelcap);
-    //handleRoot();
+    WebSerial.printf("New Fuel Capacity = %0.2f\r\n", fuel_info.fuelcap);
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
 
@@ -165,10 +166,10 @@ void setup() {
   server.on(UriBraces("/res/{}"), []() {
     String value = server.pathArg(0);
     fuel_info.reslevel = value.toFloat();
+    fuel_info.cmd = cmdFuel;
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-//    Serial.printf("New res Level = %0.2f\r\n", fuel_info.fuellevel);
-    //handleRoot();
+    WebSerial.printf("New res Level = %0.2f\r\n", fuel_info.fuellevel);
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
 
@@ -176,10 +177,10 @@ void setup() {
   server.on(UriBraces("/restank/{}"), []() {
     String value = server.pathArg(0);
     fuel_info.rescap = value.toFloat();
+    fuel_info.cmd = cmdFuel;
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-//    Serial.printf("New res cap = %0.2f\r\n", fuel_info.fuellevel);
-    //handleRoot();
+    WebSerial.printf("New res cap = %0.2f\r\n", fuel_info.fuellevel);
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
 
@@ -190,10 +191,8 @@ void setup() {
     fuel_info.light = (value == "on"?true:false);
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     if (fuel_info.light) {
-    //  ledcWrite(0, brightnesson);
       smartdisplay_lcd_set_backlight((float)brightnesson/255.0);
     } else {
-    //  ledcWrite(0, brightnessoff);
     smartdisplay_lcd_set_backlight((float)brightnessoff/255.0);
     }
     
@@ -238,16 +237,21 @@ void setup() {
     fuel_info.fuelcap = server.arg("fueltank").toFloat();
     fuel_info.rescap = server.arg("restank").toFloat();
     String value =  server.arg("light");
-//    Serial.printf("args\r\nfuel: %s\r\nres: %s\r\nfueltank: %s\r\nrestank: %s\r\n------\r\n", 
-//        server.arg("fuel"), 
-//        server.arg("res"), 
-//        server.arg("fueltank"),
-//        server.arg("restank"));
+    WebSerial.printf("args\r\nfuel: %s\r\nres: %s\r\nfueltank: %s\r\nrestank: %s\r\n------\r\n", 
+        server.arg("fuel"), 
+        server.arg("res"), 
+        server.arg("fueltank"),
+        server.arg("restank"));
     value.toLowerCase();
     fuel_info.light = (value=="on"?true:false);
+    fuel_info.cmd = cmdFuel;
     memcpy(&(fuel_info.flags), &flag_info, sizeof(flags_t));
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-    //handleRoot();
+    if (fuel_info.light) {
+      smartdisplay_lcd_set_backlight((float)brightnesson/255.0);
+    } else {
+    smartdisplay_lcd_set_backlight((float)brightnessoff/255.0);
+    }
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
 
@@ -259,19 +263,13 @@ void setup() {
     flag_info.flags2 = server.arg("flags2").toInt();
     flag_info.cmdtime = millis();
     memcpy(&fuel_info.flags, &flag_info, sizeof(flags_t));
-    /*xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-    while (!xQueueSend(quFlags, &flag_info, 0)) {
-      flags_t flagdump;
-      xQueueReceive(quFlags, &flagdump, 0);
-    }*/
-    //handleRoot();
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
 });
   // ship name at top of screen
   server.on("/name", []() {
     String shipname = server.arg("name");
     LOCK;
-    lv_label_set_text(ui_lblShipName, shipname.c_str());
+    lv_label_set_text(ui_ScreenFuel_lblShipName, shipname.c_str());
     RELEASE;
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
@@ -290,7 +288,7 @@ void setup() {
   server.on("/endsession",[]() {
     fuel_info.cmd = cmdWaitingForStartup;
     xQueueSend(QueueHandle, &fuel_info, portMAX_DELAY);
-    //handleRoot();
+    smartdisplay_lcd_set_backlight((float)brightnessoff/255.0);
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
   });
   // -- End of URL handlers
@@ -331,7 +329,7 @@ void setup() {
   pmills = cmills;
   while (iotWebConf.getState() != iotwebconf::OnLine) {
     if (cmills - pmills > 1500) {
-      lv_obj_clear_flag(ui_lblWifiInfo, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_clear_flag(ui_screenWiFiConfig_lblWifiInfo, LV_OBJ_FLAG_HIDDEN);
     }
     iotWebConf.doLoop();
     lv_timer_handler();
@@ -339,33 +337,32 @@ void setup() {
   }
 
   String myIpAddress = WiFi.localIP().toString();
-  passset = String(lv_label_get_text(ui_lblWaiting));
+  passset = String(lv_label_get_text(ui_screenWaitingForData_lblWaiting));
   passset.replace("*IP*", myIpAddress);
-  lv_label_set_text(ui_lblWaiting, passset.c_str());
+  lv_label_set_text(ui_screenWaitingForData_lblWaiting, passset.c_str());
 
-  //lv_disp_load_scr(ui_screenWaitingForData);
-  //lv_scr_load_anim(ui_screenWaitingForData, LV_SCR_LOAD_ANIM_OVER_RIGHT, 2000, 50, false);
   switchToScreen(ui_screenWaitingForData);
   lv_timer_handler();
   fuel_info.cmd = cmdFuel;
 
   memset(&flag_info, 0, sizeof(flags_t));
-  
-  //xQueueSend(quFlags, &flag_info, 1);
 
   xTaskCreatePinnedToCore( ledFlagBlink, "blink", 3000, NULL, 1, &tskBlink, xPortGetCoreID() );
   xTaskCreatePinnedToCore( updateDisplay, "display", 3000, NULL, 1, &tskDisplay, xPortGetCoreID() );
-//  Serial.println("Ready.");
+  //gpiodisplay.begin();
+
+  WebSerial.begin(&monitor);
+  monitor.begin();
+  WebSerial.println("Ready.");
 }
 
 
 void loop() {
     iotWebConf.doLoop();
-    //updateDisplay(NULL);
-    //ledFlagBlink(NULL);
     LOCK;
     lv_timer_handler();
     RELEASE;
+    vTaskDelay(2 * portTICK_RATE_MS);
     
 }
 
@@ -392,17 +389,16 @@ void updateDisplay(void *parameter){
 
     // if in srv set Main Tank = Res & Res = 0
     if (fuelinfo.flags.flags & edflags::InSRV) {
-      //fuelinfo.fuellevel = fuelinfo.reslevel;
       fuelinfo.reslevel = 0;
       fuelinfo.fuelcap = 0.5;
     }
     switch(fuelinfo.cmd) {
       case cmdFuel:
         if (activescreen != ui_ScreenFuel) {
-          //lv_disp_load_scr(ui_ScreenFuel);
           LOCK;
           switchToScreen(ui_ScreenFuel);
           RELEASE;
+          smartdisplay_lcd_set_backlight((float)brightnesson/255.0);
         }
         f = fuelinfo.fuellevel;
         fc = fuelinfo.fuelcap;
@@ -417,31 +413,28 @@ void updateDisplay(void *parameter){
         LOCK;
         // draw main tank bars
         percentage = (uint8_t)((f/fc)*100);
-        lv_bar_set_value(ui_brMain, percentage, LV_ANIM_ON);
+        lv_bar_set_value(ui_ScreenFuel_brMain, percentage, LV_ANIM_ON);
 
         // draw reservoir bar
         percentage = (uint8_t)((r/rc)*100);
-        lv_bar_set_value(ui_brRes, percentage, LV_ANIM_ON);
+        lv_bar_set_value(ui_ScreenFuel_brRes, percentage, LV_ANIM_ON);
 
         // string values
         fuelInfo = String(f,2)+"t";
-        lv_label_set_text(ui_lblMainFuel, fuelInfo.c_str());
+        lv_label_set_text(ui_ScreenFuel_lblMainFuel, fuelInfo.c_str());
         fuelInfo = String(r,3)+"t";
-        lv_label_set_text(ui_lblResFuel, fuelInfo.c_str());
+        lv_label_set_text(ui_ScreenFuel_lblResFuel, fuelInfo.c_str());
         if (activescreen != ui_ScreenFuel) {
-          //lv_disp_load_scr(ui_ScreenFuel);
           switchToScreen(ui_ScreenFuel);
         }
         RELEASE;
         break;
       case cmdWiFiConfig:
-        //lv_disp_load_scr(ui_screenWiFiConfig);
         LOCK;
         switchToScreen(ui_screenWiFiConfig);
         RELEASE;
         break;    
       case cmdWaitingForStartup:
-        //lv_disp_load_scr(ui_screenWaitingForData);
         LOCK;
         switchToScreen(ui_screenWaitingForData);
         RELEASE;
@@ -465,16 +458,16 @@ void ledFlagBlink(void *parameter){
       memcpy(&flags, &flag_info, sizeof(flags_t));
       xSemaphoreGive(quFlags);
     }
-    //memcpy(&flags, &prevflags, sizeof(flags_t));
+
     currentMs = millis();
     blinking = false;
     fsdActivity = false;
-  //  lv_obj_add_flag(ui_spinCharging, LV_OBJ_FLAG_HIDDEN);
-
+    flags.flags &= 0x1141768192;  // blank out unwanted flags
     // low fuel flasher
     if (flags.flags & edflags::LowFuel) {
       LOCK;
-      lv_obj_clear_flag(ui_spinLowFuel, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_clear_flag(ui_ScreenFuel_spinLowFuel, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_clear_state(ui_ScreenFuel_spinLowFuel, LV_STATE_DISABLED);
       RELEASE;
       blinking = true;
       if (currentMs - msLowFuel > 500) {
@@ -494,7 +487,8 @@ void ledFlagBlink(void *parameter){
       bgIsRed = false;
       LOCK;
       lv_obj_set_style_bg_color(ui_ScreenFuel, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_add_flag(ui_spinLowFuel, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(ui_ScreenFuel_spinLowFuel, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_state(ui_ScreenFuel_spinLowFuel, LV_STATE_DISABLED);
       RELEASE;
     }
 
@@ -506,10 +500,10 @@ void ledFlagBlink(void *parameter){
         xSemaphoreTake(quFlags, portMAX_DELAY);
         fsdchargetime = (flags.flags2 & edflags2::HyperdriveCharging)?hyperchargetime:scchargetime;
         xSemaphoreGive(quFlags);
-//        Serial.printf("Started CHarging %d (flags:%d)\r\n", fsdchargetime, flags.flags2);
+        WebSerial.printf("Started Charging %d (flags:%d)\r\n", fsdchargetime, flags.flags2);
         LOCK;
-        lv_arc_set_value(ui_spinCharging, 0);
-        lv_obj_clear_flag(ui_spinCharging, LV_OBJ_FLAG_HIDDEN);
+        lv_arc_set_value(ui_ScreenFuel_spinCharging, 0);
+        lv_obj_clear_flag(ui_ScreenFuel_spinCharging, LV_OBJ_FLAG_HIDDEN);
         RELEASE;
         //msCharge = flags.cmdtime;
         msCharge = currentMs;
@@ -519,21 +513,21 @@ void ledFlagBlink(void *parameter){
         currentPercent = 0;
         msCharge = currentMs;
       }
-      //Serial.printf("cm: %d - ms:%d  = %% %d\r\n", currentMs, msCharge, currentPercent);
+      //WebSerial.printf("cm: %d - ms:%d  = %% %d\r\n", currentMs, msCharge, currentPercent);
       LOCK;
-      lv_arc_set_value(ui_spinCharging, currentPercent);
+      lv_arc_set_value(ui_ScreenFuel_spinCharging, currentPercent);
       RELEASE;
     } 
 
     // cooldown
     if (flags.flags & edflags::FsdCooldown) {
-      int16_t currentPercent;// = lv_arc_get_value(ui_spinCharging);
+      int16_t currentPercent;// = lv_arc_get_value(ui_ScreenFuel_spinCharging);
       blinking = true;
       fsdActivity = true;
       if (!(prevflags.flags & edflags::FsdCooldown)) {
-//        Serial.println("cooldown");      
+        WebSerial.println("cooldown");      
         LOCK;
-        lv_arc_set_value(ui_spinCharging, 100);
+        lv_arc_set_value(ui_ScreenFuel_spinCharging, 100);
         RELEASE;
         currentPercent = 100;
         msCooldown = flags.cmdtime;
@@ -546,8 +540,8 @@ void ledFlagBlink(void *parameter){
         msCooldown = currentMs;
       }
       LOCK;
-      lv_arc_set_value(ui_spinCharging, currentPercent);
-      lv_obj_clear_flag(ui_spinCharging, LV_OBJ_FLAG_HIDDEN);
+      lv_arc_set_value(ui_ScreenFuel_spinCharging, currentPercent);
+      lv_obj_clear_flag(ui_ScreenFuel_spinCharging, LV_OBJ_FLAG_HIDDEN);
       RELEASE;
 
     }
@@ -555,8 +549,8 @@ void ledFlagBlink(void *parameter){
     if (flags.flags & edflags::FsdJump) {
       if (!(prevflags.flags & edflags::FsdJump)) {
         LOCK;
-        lv_arc_set_value(ui_spinCharging, 100);
-        lv_obj_clear_flag(ui_spinCharging, LV_OBJ_FLAG_HIDDEN);
+        lv_arc_set_value(ui_ScreenFuel_spinCharging, 100);
+        lv_obj_clear_flag(ui_ScreenFuel_spinCharging, LV_OBJ_FLAG_HIDDEN);
         RELEASE;
       }
       /*blinking = true;
@@ -564,9 +558,9 @@ void ledFlagBlink(void *parameter){
         spinVisible = !spinVisible;
         LOCK;
         if (spinVisible) {
-          lv_obj_add_flag(ui_spinCharging, LV_OBJ_FLAG_HIDDEN);
+          lv_obj_add_flag(ui_ScreenFuel_spinCharging, LV_OBJ_FLAG_HIDDEN);
         } else {
-          lv_obj_clear_flag(ui_spinCharging, LV_OBJ_FLAG_HIDDEN);
+          lv_obj_clear_flag(ui_ScreenFuel_spinCharging, LV_OBJ_FLAG_HIDDEN);
         }
         RELEASE;
         msJumping = currentMs;
@@ -576,9 +570,9 @@ void ledFlagBlink(void *parameter){
     if ( !(flags.flags & edflags::FsdJump)) {
       LOCK;
       if (fsdActivity) {
-        lv_obj_clear_flag(ui_spinCharging, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(ui_ScreenFuel_spinCharging, LV_OBJ_FLAG_HIDDEN);
       } else {
-        lv_obj_add_flag(ui_spinCharging, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(ui_ScreenFuel_spinCharging, LV_OBJ_FLAG_HIDDEN);
       }
        RELEASE;
 
