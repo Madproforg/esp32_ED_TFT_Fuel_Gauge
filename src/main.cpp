@@ -258,10 +258,10 @@ void setup() {
   // flags
   server.on("/flags", []() {
     xSemaphoreTake(quFlags, portMAX_DELAY);
-    flag_info.flags = server.arg("flags").toInt();
-    xSemaphoreGive(quFlags);
+    flag_info.flags = strtoll(server.arg("flags").c_str(),NULL,10);
     flag_info.flags2 = server.arg("flags2").toInt();
     flag_info.cmdtime = millis();
+    xSemaphoreGive(quFlags);
     memcpy(&fuel_info.flags, &flag_info, sizeof(flags_t));
     server.send(200, "text/html", "<html><head></head><body><p>OK</p></body></html>");
 });
@@ -462,7 +462,7 @@ void ledFlagBlink(void *parameter){
     currentMs = millis();
     blinking = false;
     fsdActivity = false;
-    flags.flags &= 0x1141768192;  // blank out unwanted flags
+    flags.flags &= (edflags::LowFuel + edflags::FsdCharging + edflags::FsdJump + edflags::FsdCooldown);  // blank out unwanted flags
     // low fuel flasher
     if (flags.flags & edflags::LowFuel) {
       LOCK;
@@ -578,6 +578,7 @@ void ledFlagBlink(void *parameter){
 
     }
     memcpy(&prevflags, &flags, sizeof(flags_t));
+    vTaskDelay(5);
   }
 }
 

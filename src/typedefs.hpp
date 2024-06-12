@@ -2,8 +2,8 @@
 #define EDFUEL_TYPEDEFS_INCLUDED
 
 typedef struct {
-  uint32_t flags;
-  uint32_t flags2;
+  uint64_t flags;
+  uint64_t flags2;
   unsigned long cmdtime;
 } flags_t;
 
